@@ -1,0 +1,95 @@
+name: Build macOS (no ads)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-personal-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  macos:
+    name: macOS universal DMG
+    runs-on: macos-15
+    timeout-minutes: 120
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "12.0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/codex-plus-manager/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: macos-personal
+
+      - name: Install frontend dependencies
+        working-directory: apps/codex-plus-manager
+        run: npm ci
+
+      - name: Check generated renderer
+        run: node scripts/assemble-renderer-inject.mjs --check
+
+      - name: Check frontend types
+        working-directory: apps/codex-plus-manager
+        run: npm run check
+
+      - name: Frontend regression tests
+        working-directory: apps/codex-plus-manager
+        run: npm test
+
+      - name: Build frontend
+        working-directory: apps/codex-plus-manager
+        run: npm run vite:build
+
+      - name: Rust ad regression tests
+        run: |
+          cargo test --locked -p codex-plus-core --test all ads::
+          cargo test --locked -p codex-plus-core --test all injection_script_does_not_fetch_remote_ads
+
+      - name: Build ad-hoc signed universal DMG
+        run: |
+          VERSION="$(node -p 'JSON.parse(require("fs").readFileSync("apps/codex-plus-manager/package.json", "utf8")).version')"
+          bash scripts/installer/macos/build-universal.sh "${VERSION}-noads.${GITHUB_RUN_NUMBER}"
+
+      - name: Verify app signatures and architecture
+        run: |
+          set -euo pipefail
+          for APP in "dist/macos/stage/Codex++.app" "dist/macos/stage/Codex++ 管理工具.app"; do
+            plutil -lint "$APP/Contents/Info.plist"
+            codesign --verify --deep --strict "$APP"
+            EXECUTABLE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Contents/Info.plist")
+            lipo -verify_arch x86_64 arm64 "$APP/Contents/MacOS/$EXECUTABLE"
+          done
+          cd dist/macos
+          shasum -a 256 ./*.dmg > SHA256SUMS.txt
+
+      - name: Upload installable DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-plus-plus-macos-noads-${{ github.run_number }}
+          path: |
+            dist/macos/*.dmg
+            dist/macos/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Build summary
+        run: |
+          printf '%s\n' '## macOS no-ads build' \
+            'Download the DMG from the Artifacts section of this run.' \
+            'Supports Apple Silicon and Intel. Ad-hoc signed; not Apple-notarized.' \
+            'No Apple signing secrets or API provider credentials are used.' >> "$GITHUB_STEP_SUMMARY"

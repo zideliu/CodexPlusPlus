@@ -44,6 +44,7 @@ concurrency:
 
 jobs:
   prepare:
+    if: github.repository == 'BigPizzaV3/CodexPlusPlus'
     name: Prepare draft Release
     runs-on: ubuntu-latest
     outputs:

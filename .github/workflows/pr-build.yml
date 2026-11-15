@@ -28,6 +28,7 @@ concurrency:
 
 jobs:
   windows-artifacts:
+    if: github.repository == 'BigPizzaV3/CodexPlusPlus'
     name: Windows artifacts
     runs-on: windows-latest
     steps:
@@ -195,6 +196,7 @@ jobs:
           if-no-files-found: error
 
   macos-dmg:
+    if: github.repository == 'BigPizzaV3/CodexPlusPlus'
     # PR / 推送 main 只做 cargo check：Windows、Linux 编不到 macOS 专属代码（录屏、objc 等），
     # 这里是唯一的编译检查。双架构通用包（ad-hoc 签名）只在手动触发时打，发版走 release-assets.yml。
     name: macOS DMG (universal)
@@ -299,6 +301,7 @@ jobs:
           if-no-files-found: error
 
   linux-deb:
+    if: github.repository == 'BigPizzaV3/CodexPlusPlus'
     name: Linux DEB (Ubuntu 24.04, amd64)
     runs-on: ubuntu-24.04
     steps:

@@ -613,7 +613,7 @@ test("普通供应商的价格与代理在详情里编辑，官方账号可在�
   assert.match(extras, /placeholder="http:\/\/127\.0\.0\.1:7890"/);
 });
 
-test("赞助商单独一组放在「添加供应商」最前面，不再混在中转里", () => {
+test("保留供应商预设兼容性，但自用版添加目录不展示赞助商推广分组", () => {
   const presets = gatewayPresets(new Date(2026, 9, 26));
   const sponsors = presets.filter((preset) => preset.section === "sponsor").map((preset) => preset.key);
   assert.deepEqual(sponsors, ["jojocode-max", "runapi", "apikeyfun", "cccccc-api", "tokenmy"]);
@@ -630,7 +630,8 @@ test("赞助商单独一组放在「添加供应商」最前面，不再混在�
   const relays = presets.filter((preset) => preset.section === "relay").map((preset) => preset.key);
   assert.ok(relays.includes("openrouter") && relays.includes("siliconflow") && relays.includes("opencode-go"));
   const catalog = readFileSync(new URL("./GatewayProviders.tsx", import.meta.url), "utf8");
-  assert.ok(catalog.indexOf('key: "sponsor"') < catalog.indexOf('key: "subscription"'));
+  assert.ok(!catalog.includes('key: "sponsor"'));
+  assert.ok(catalog.includes('key: "subscription"'));
 });
 
 test("起名模型随绑定草稿往返，空值和旧版后端缺字段都当成不指定", () => {

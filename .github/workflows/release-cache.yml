@@ -25,6 +25,7 @@ concurrency:
 
 jobs:
   windows:
+    if: github.repository == 'BigPizzaV3/CodexPlusPlus'
     name: Windows release deps
     runs-on: windows-latest
     steps:
@@ -58,6 +59,7 @@ jobs:
         run: cargo build --release
 
   macos:
+    if: github.repository == 'BigPizzaV3/CodexPlusPlus'
     name: macOS release deps (${{ matrix.target }})
     runs-on: macos-15
     strategy:

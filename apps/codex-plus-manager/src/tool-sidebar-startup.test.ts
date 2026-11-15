@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { it } from "node:test";
 
-it("广告请求持续未完成时，侧栏工具列表仍能加载", async () => {
+it("自用版启动不发广告请求，侧栏工具和配置仍能加载", async () => {
   const source = await readFile(new URL("./App.tsx", import.meta.url), "utf8");
   const effect = source.slice(source.indexOf("    void refreshTools(true);"));
   const startup = effect.slice(0, effect.indexOf("  }, []);"));
@@ -19,7 +19,7 @@ it("广告请求持续未完成时，侧栏工具列表仍能加载", async () =
     checkUpdate: noOp,
     refreshOverview: noOp,
     refreshAds: async () => { events.push("ads"); await pendingAds; },
-    refreshSettings: noOp,
+    refreshSettings: async () => { events.push("settings"); },
     refreshRelay: noOp,
     refreshEnvConflicts: noOp,
     refreshProviderSyncTargets: noOp,
@@ -33,8 +33,9 @@ it("广告请求持续未完成时，侧栏工具列表仍能加载", async () =
   );
   try {
     await new Promise((resolve) => setImmediate(resolve));
-    assert.ok(events.includes("ads"), "测试必须真的到达未完成的广告请求");
-    assert.ok(events.includes("tools"), "广告尚未返回，工具列表也应已加载");
+    assert.ok(!events.includes("ads"), "自用版不应发出广告请求");
+    assert.ok(events.includes("tools"), "工具列表应加载");
+    assert.ok(events.includes("settings"), "配置应加载");
   } finally {
     releaseAds();
   }

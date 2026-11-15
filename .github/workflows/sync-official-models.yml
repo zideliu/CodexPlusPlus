@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   check:
+    if: github.repository == 'BigPizzaV3/CodexPlusPlus'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

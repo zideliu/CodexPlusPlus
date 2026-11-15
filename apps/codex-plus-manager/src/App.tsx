@@ -1439,7 +1439,7 @@ const MANAGER_NAVIGATION_EVENT = "manager-navigation-requested";
  * 新增页面时**必须**想清楚归属：默认可见会让 Codex 专属功能在 Grok 下露出来。
  */
 const routes: Array<{ id: Route; label: string; icon: LucideIcon; badge?: string; tool?: string; tools?: readonly string[] }> = [
-  // 首页：整个程序的落脚页，专门放赞助商推荐（原「推荐内容」页并进来）。
+  // 首页：状态与常用入口（兼容旧「推荐内容」路由）。
   { id: "home", get label() { return t("首页"); }, icon: House },
   // 概览在两个工具下都可见：它承载共用的置顶推荐位，以及各自的状态。
   { id: "overview", get label() { return t("概览"); }, icon: LayoutDashboard },
@@ -1872,9 +1872,6 @@ export function App() {
     percent: 0,
     message: t("尚未运行安装包更新。"),
   });
-  const [ads, setAds] = useState<AdsResult | null>(null);
-  // 供应商池右下角「正在找合适的供应商？」的悬浮提示：点 × 关掉，本次运行内不再出现。
-  const [sponsorHintClosed, setSponsorHintClosed] = useState(false);
   const [scriptMarket, setScriptMarket] = useState<ScriptMarketResult | null>(null);
   const [launchForm, setLaunchForm] = useState({
     appPath: "",
@@ -3031,7 +3028,6 @@ export function App() {
       await refreshScriptMarket(true);
       await refreshUserScriptInventory();
     }
-    if (next === "home") await refreshAds(true);
     if (next === "settings") {
       await refreshOverview(true);
       await refreshLogs(true);
@@ -3755,14 +3751,6 @@ export function App() {
     }
   };
 
-  const refreshAds = async (silent = false) => {
-    const result = await run(() => call<AdsResult>("load_ads"));
-    if (result) {
-      setAds(result);
-      if (!silent) showResultNotice(t("推荐内容"), result, { silentSuccess: true });
-    }
-  };
-
   const refreshProviderSyncTargets = async (silent = false) => {
     const result = await run(() => call<ProviderSyncTargetsResult>("load_provider_sync_targets"));
     if (result) {
@@ -4352,8 +4340,6 @@ export function App() {
         void checkUpdate(true);
       }
       await refreshOverview(true);
-      // 启动落在首页，首页就是赞助商推荐，所以启动就拉一次。
-      await refreshAds(true);
       if (!handledNavigation) await refreshSettings(true);
       await refreshRelay(true);
       await refreshEnvConflicts(true);
@@ -4840,7 +4826,6 @@ export function App() {
       importCcsProviders,
       refreshLiveContextEntries,
       syncLiveContextEntries,
-      refreshAds,
       refreshScriptMarket,
       refreshUserScriptInventory,
       reloadUserScripts: async () => { await reloadUserScripts(); },
@@ -5131,7 +5116,7 @@ export function App() {
     return { id: `${group}:${routeId}`, group, label: item.label, keywords: `${routeId} ${keywords}`, icon: <Icon className="h-4 w-4" />, run };
   };
   const pushCommand = (command: PaletteCommand | null) => { if (command) paletteCommands.push(command); };
-  pushCommand(routeCommand("home", t("全局管理"), () => void navigate("home"), "home ads 推荐 赞助"));
+  pushCommand(routeCommand("home", t("全局管理"), () => void navigate("home"), "home 状态 常用"));
   gatewayNavigationRoutes.forEach((routeId) => pushCommand(routeCommand(routeId, t("网关"), () => void navigate(routeId), "gateway")));
   managementNavigationRoutes.forEach((routeId) => pushCommand(routeCommand(routeId, t("全局管理"), () => void navigate(routeId))));
   pushCommand(routeCommand("requestLog", t("全局管理"), () => void navigate("requestLog"), "usage requests"));
@@ -5483,8 +5468,6 @@ export function App() {
           {route === "pluginMarket" ? <PluginMarketScreen /> : null}
           {route === "home" ? (
             <HomeScreen
-              ads={ads}
-              actions={actions}
               tools={shownTools}
               focus={agentFocus}
               codexRunning={codexAppRunning}
@@ -5521,22 +5504,6 @@ export function App() {
               onTabChange={(tab) => void navigate(gatewayRouteByTab[tab])}
               tab={gatewayTabByRoute[route]}
             />
-          ) : null}
-          {/* 供应商池右下角的悬浮提示：在找供应商时顺手带去首页的赞助商推荐；首页没有赞助商时不显示。 */}
-          {route === "gatewayProviders" && !sponsorHintClosed && (ads?.ads?.length ?? 0) + (ads?.topAds?.length ?? 0) > 0 ? (
-            <div className="cx-float-hint">
-              <button className="cx-float-hint-main" onClick={() => void navigate("home")} type="button">
-                <Sparkles aria-hidden="true" />
-                <span className="cx-float-hint-copy">
-                  <strong>{t("正在找合适的供应商？")}</strong>
-                  <small>{t("去首页看看赞助商推荐")}</small>
-                </span>
-                <ArrowRight aria-hidden="true" />
-              </button>
-              <button aria-label={t("关闭")} className="cx-float-hint-close" onClick={() => setSponsorHintClosed(true)} title={t("关闭")} type="button">
-                <X aria-hidden="true" />
-              </button>
-            </div>
           ) : null}
           {route === "agentSettings" || route === "maintenance" ? (
             // 设置与安装维护合在一页：左侧分类目录，右侧限宽列表。
@@ -5897,7 +5864,6 @@ type Actions = {
   importCcsProviders: (bindings?: Record<string, string>) => Promise<void>;
   refreshLiveContextEntries: () => Promise<LiveContextEntriesResult | null>;
   syncLiveContextEntries: (settings: BackendSettings, silent?: boolean) => Promise<LiveContextEntriesResult | null>;
-  refreshAds: () => Promise<void>;
   refreshScriptMarket: (silent?: boolean, preserveRuntime?: boolean) => Promise<void>;
   refreshUserScriptInventory: () => Promise<SettingsResult | null>;
   reloadUserScripts: () => Promise<void>;
@@ -11310,13 +11276,8 @@ function SessionsScreen({
   );
 }
 
-/// 首页：整个程序的落脚页。上面是各 Agent 与网关的状态，中间是精选推荐和其他赞助商，最下面是常用入口。
-///
-/// 推荐：置顶位全部做大卡片，排成一行均分宽度；推荐池里的赞助商全部列出，两列小卡片，紧跟在精选下面。
-/// 置顶位和推荐池里同一家常有两个 id、同一个落地页，按 adIdentity 去重。只展示赞助商，普通推荐不显示。
+/// 自用版首页仅显示 Agent、网关状态与常用入口。
 function HomeScreen({
-  ads,
-  actions,
   tools,
   focus,
   codexRunning,
@@ -11325,8 +11286,6 @@ function HomeScreen({
   onNavigate,
   onOpenAgent,
 }: {
-  ads: AdsResult | null;
-  actions: Actions;
   tools: ToolEntry[];
   focus: AgentFocus;
   codexRunning: boolean;
@@ -11339,14 +11298,6 @@ function HomeScreen({
   const usage = useTodayUsage();
   const enhanceOnly = providersHidden(focus);
   const connected = new Set((gateway?.agents ?? []).filter((agent) => agent.enabled).map((agent) => agent.agent as string));
-
-  const topAds = featuredAds(ads);
-  const topIdentities = new Set(topAds.map(adIdentity));
-  const pool = (ads?.ads ?? []).filter((ad) => !isExpiredAd(ad) && !topIdentities.has(adIdentity(ad)));
-  // 大横幅只放置顶位（top_ad / topAds），没有置顶位就不显示；推荐池里的赞助商只进下面的列表。
-  const heroes = topAds;
-  const rest = pool.filter((ad) => ad.type === "sponsor");
-  const open = (ad: AdItem) => void actions.openExternalUrl(ad.url);
 
   const shortcuts: Array<{ route: Route; label: string; detail: string; icon: LucideIcon }> = [
     { route: "userScripts", label: t("万物皆拓展"), detail: t("给 Codex、Claude 加功能的脚本"), icon: Blocks },
@@ -11404,13 +11355,6 @@ function HomeScreen({
 
   return (
     <div className="tp-page home-page">
-      <TopbarActions>
-        <button className="cx-secondary" onClick={() => void actions.refreshAds()} type="button">
-          <RefreshCw />
-          {t("刷新推荐")}
-        </button>
-      </TopbarActions>
-
       <CxSection title={t("状态")}>
         <CxCard>
           {tools.map(agentRow)}
@@ -11426,69 +11370,6 @@ function HomeScreen({
           )}
         </CxCard>
       </CxSection>
-
-      {heroes.length ? (
-        <CxSection aside={<span>{t("赞助商推荐：支持 Codex++ 的服务")}</span>} title={t("精选推荐")}>
-          <div className="home-heroes" data-dense={heroes.length >= 3 || undefined} style={{ gridTemplateColumns: `repeat(${heroes.length}, minmax(0, 1fr))` }}>
-            {heroes.map((ad) => (
-              <div
-                className="home-hero"
-                key={adIdentity(ad)}
-                onClick={() => open(ad)}
-                onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); open(ad); } }}
-                role="link"
-                tabIndex={0}
-                title={`${ad.description}\n${ad.url}`}
-              >
-                {ad.image ? <img alt="" className="home-hero-image" src={ad.image} /> : <span className="home-hero-image home-hero-placeholder"><Sparkles aria-hidden="true" /></span>}
-                <div className="home-hero-body">
-                  <div className="home-hero-head">
-                    <strong>{formatAdTitle(ad.title)}</strong>
-                  </div>
-                  <p className="home-hero-text">{ad.description}</p>
-                  {ad.highlights?.length ? (
-                    <div className="home-hero-chips">
-                      {ad.highlights.filter(Boolean).slice(0, 4).map((item) => <span key={item}>{item}</span>)}
-                    </div>
-                  ) : null}
-                  <div className="home-hero-foot">
-                    <span className="home-hero-host">{adHost(ad.url)}</span>
-                    <span className="home-hero-cta">{t("了解更多")}<ArrowRight aria-hidden="true" /></span>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </CxSection>
-      ) : null}
-
-      {rest.length ? (
-        <CxSection count={rest.length} title={t("更多赞助商")}>
-          <div className="home-sponsors">
-            {rest.map((ad) => (
-              <div
-                className="home-sponsor"
-                key={adIdentity(ad)}
-                onClick={() => open(ad)}
-                onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); open(ad); } }}
-                role="link"
-                tabIndex={0}
-                title={`${ad.description}\n${ad.url}`}
-              >
-                {ad.image ? <img alt="" className="home-sponsor-thumb" loading="lazy" src={ad.image} /> : <span className="home-sponsor-thumb home-hero-placeholder"><Sparkles aria-hidden="true" /></span>}
-                <div className="home-sponsor-body">
-                  <div className="home-sponsor-head">
-                    <strong>{formatAdTitle(ad.title)}</strong>
-                    {(ad.highlights ?? []).filter(Boolean).slice(0, 2).map((item) => <span className="home-sponsor-chip" key={item}>{item}</span>)}
-                  </div>
-                  <p className="home-sponsor-text">{ad.description}</p>
-                </div>
-                <ExternalLink aria-hidden="true" className="home-sponsor-go" />
-              </div>
-            ))}
-          </div>
-        </CxSection>
-      ) : null}
 
       <CxSection title={t("常用")}>
         <div className="home-shortcuts">
@@ -17720,7 +17601,7 @@ function AppSidebar({
   }
 
   // 主模式的入口：每项对应一条路由，match 里的路由都算选中（用量的两个页签、MCP 与 Skills 的两个胶囊）。
-  // 第一组是首页（赞助商推荐）、万物皆拓展（Codex / Claude 下）、MCP 与 Skills、会话；第二组是聚合网关：一个 Agent 经网关同时用多家供应商。
+  // 第一组是首页、万物皆拓展（Codex / Claude 下）、MCP 与 Skills、会话；第二组是聚合网关。
   type SideEntry = { key: string; route: Route; label: string; icon: LucideIcon; match: Route[]; tour?: string };
   // 万物皆拓展是独立入口，不随侧栏当前选的 Agent 显隐；宿主在页内切换。
   const extensionsShown = true;
@@ -18368,7 +18249,7 @@ function routeSubtitle(route: Route, soloAgent: string | null = null) {
   if (soloAgent && route === "hub") return tf("{0} 经 Codex++ 接入任意供应商：走哪家、是否健康，一屏看全", [agentName(soloAgent)]);
   if (soloAgent && route === "gateway") return tf("让 {0} 经 Codex++ 网关接入供应商池，并选它默认用的模型", [agentName(soloAgent)]);
   const subtitles: Record<Route, string> = {
-    home: t("赞助商推荐：支持 Codex++ 的服务"),
+    home: t("状态"),
     overview: t("检查问题、启动与快速修复"),
     relay: t("管理 API 供应商、协议、Key 与配置文件"),
     multiLaunch: t("为不同供应商启动相互隔离的 Codex 实例"),
@@ -18384,7 +18265,7 @@ function routeSubtitle(route: Route, soloAgent: string | null = null) {
     dreamSkin: t("Codex-Dream-Skin 风格主题和换图"),
     userScripts: t("万物皆拓展：内置、市场和自己做的拓展"),
     pluginMarket: t("检索插件，按需下载并安装到 Codex"),
-    recommendations: t("来自 Codex++ 广告源的推荐，点卡片在浏览器里打开"),
+    recommendations: t("状态"),
     agentCache: t("扫描 Codex、Claude 与 Codex++ 的已知缓存目录，由你选择清理项目。"),
     agentCollaboration: t("连接 Codex、DeepSeek Harness、Claude Code 与 Google Antigravity，派发任务并查看结果。"),
     computerUse: t("复用 Codex 的 Computer Use，通过 MCP 接给 Claude Code、Claude Desktop 与 Codex。"),

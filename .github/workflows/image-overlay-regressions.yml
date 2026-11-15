@@ -19,6 +19,7 @@ permissions:
 
 jobs:
   image-overlay-regressions:
+    if: github.repository == 'BigPizzaV3/CodexPlusPlus'
     name: Image overlay regressions
     runs-on: windows-latest
     timeout-minutes: 15

@@ -1045,7 +1045,7 @@ describe("renderer injection header compatibility", () => {
     assert.match(renderer, /const codexPlusRailSponsorId = "codex-plus-rail-sponsor"/);
     assert.match(renderer, /const codexPlusSponsorTab = "sponsor"/);
     assert.match(renderer, /function openCodexPlusSponsor\(\)/);
-    assert.match(renderer, /id: codexPlusRailSponsorId, label: "推荐内容"/);
+    assert.doesNotMatch(renderer, /id: codexPlusRailSponsorId, label: "推荐内容"/);
     // 三个入口都要参与选中态映射，否则「推荐内容」亮不起来。
     assert.match(renderer, /\[codexPlusRailSponsorId, "sponsor"\],/);
     assert.match(renderer, /if \(tab === codexPlusSponsorTab\) return "sponsor";/);
