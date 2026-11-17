@@ -4,6 +4,9 @@ Modified on 2026-11-15 for a personal, ad-free Codex++ build.
 This is an unofficial derivative of BigPizzaV3/CodexPlusPlus, not an OpenAI product.
 The original AGPL-3.0-only license and third-party notices remain in effect.
 
+The default `personal-macos` branch contains the verified changes based on upstream
+2.6.10 (`f116127`). The `main` branch retains upstream history independently.
+
 ## Changes
 
 - Home shows Agent/gateway status and shortcuts without sponsor cards or refresh controls.
@@ -16,7 +19,7 @@ The original AGPL-3.0-only license and third-party notices remain in effect.
 ## Build and Download
 
 1. Open the fork's Actions tab and enable workflows if GitHub prompts you.
-2. Select **Build macOS (no ads)**, then **Run workflow** on `main`.
+2. Select **Build macOS (no ads)**, then **Run workflow** on `personal-macos`.
 3. After success, download `codex-plus-plus-macos-noads-<run number>` from the run's Artifacts section.
 4. Extract the artifact ZIP to obtain the universal DMG and SHA256 checksums.
 
