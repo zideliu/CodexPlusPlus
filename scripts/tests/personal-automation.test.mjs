@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { mergeUpstream } from "../sync-personal-upstream.mjs";
-import { releaseIdentity, verifyAssets, latestManifest } from "../personal-release.mjs";
+import { releaseIdentity, verifyAssets, latestManifest, resolveUpstreamNotes, personalReleaseNotes } from "../personal-release.mjs";
 
 function fixture() {
   const root = mkdtempSync(path.join(os.tmpdir(), "personal-sync-"));
@@ -141,4 +141,67 @@ test("upstream updater changes require manual review before publication", () => 
   const f = fixture();
   f.upstream({ "crates/codex-plus-core/src/update.rs": "new updater code\n" });
   assert.throws(() => mergeUpstream(f.root, "upstream"), /manual review/);
+});
+
+test("upstream notes request the exact built version, never releases/latest", () => {
+  const notes = resolveUpstreamNotes("2.7.1", "a".repeat(40), {
+    gh: (...args) => {
+      assert.deepEqual(args, ["api", "repos/BigPizzaV3/CodexPlusPlus/releases/tags/v2.7.1"]);
+      return JSON.stringify({ tag_name: "v2.7.1", body: "### Fixes\n\nA fix.\n", draft: false, html_url: "https://untrusted.example" });
+    },
+    git: () => { throw new Error("Changelog should not be read for usable release notes"); },
+  });
+  assert.equal(notes.body, "### Fixes\n\nA fix.");
+  assert.equal(notes.url, "https://github.com/BigPizzaV3/CodexPlusPlus/releases/tag/v2.7.1");
+  assert.equal(notes.source, "Release");
+});
+
+for (const result of [null, { tag_name: "v2.7.1", body: " " }, { tag_name: "v9.9.9", body: "Wrong version" }, { tag_name: "v2.7.1", body: "Draft", draft: true }]) {
+  test(`missing/unusable upstream notes fall back to pinned matching changelog: ${JSON.stringify(result)}`, () => {
+    const upstream = "b".repeat(40);
+    const notes = resolveUpstreamNotes("2.7.1", upstream, {
+      gh: () => { if (!result) throw new Error("HTTP 404"); return JSON.stringify(result); },
+      git: (...args) => {
+        assert.deepEqual(args, ["show", `${upstream}:CHANGELOG.md`]);
+        return "# Changelog\n\n## 2.8.0 - later\nWrong version\n\n## 2.7.1 - today\nCorrect section\n\n## 2.7.0 - before\nOld section\n";
+      },
+      warn: () => {},
+    });
+    assert.equal(notes.body, "Correct section");
+    assert.equal(notes.source, "CHANGELOG.md");
+    assert.ok(notes.url.includes(`/blob/${upstream}/CHANGELOG.md`));
+  });
+}
+
+test("missing notes in both sources fail instead of substituting unrelated versions", () => {
+  assert.throws(() => resolveUpstreamNotes("2.7.1", "a".repeat(40), {
+    gh: () => { throw new Error("offline"); },
+    git: () => "## 2.8.0\nNot built\n",
+    warn: () => {},
+  }), /No release notes or pinned changelog section/);
+  assert.throws(() => resolveUpstreamNotes("2.7.1/../../latest", "a".repeat(40), {
+    gh: () => { assert.fail("Must validate before network access"); }, git: () => "",
+  }), /Invalid version/);
+});
+
+test("personal wrapper preserves attribution and shares exact body with latest.json", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "personal-notes-"));
+  const sha = "a".repeat(40);
+  const filename = releaseIdentity("2.7.1", 6, sha).filename;
+  const hash = createHash("sha256").update("DMG").digest("hex");
+  writeFileSync(path.join(dir, filename), "DMG");
+  writeFileSync(path.join(dir, "SHA256SUMS.txt"), `${hash}  ${filename}\n`);
+  const upstreamBody = "### 修复\n\n- 保留原版更新条目。\n- `$(echo not-executed)`";
+  const body = personalReleaseNotes({ version: "2.7.1", runNumber: 6, sha, upstream: "b".repeat(40), runId: 123 }, {
+    body: upstreamBody, source: "Release", url: "https://github.com/BigPizzaV3/CodexPlusPlus/releases/tag/v2.7.1",
+  });
+  assert.ok(body.includes(upstreamBody));
+  assert.match(body, /非官方自用构建/);
+  assert.match(body, /AGPL-3.0-only/);
+  assert.match(body, /未经 Apple 公证/);
+  const plain = latestManifest("2.7.1", 6, sha, dir);
+  const withNotes = latestManifest("2.7.1", 6, sha, dir, body);
+  assert.equal(withNotes.body, body);
+  assert.deepEqual({ ...withNotes, body: "" }, plain);
+  assert.equal(withNotes.assets[0].url, `https://github.com/zideliu/CodexPlusPlus/releases/download/v2.7.1-noads.6/${filename}`);
 });

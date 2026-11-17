@@ -35,6 +35,19 @@ The DMG, `SHA256SUMS.txt`, and `latest.json` are uploaded to a draft first; the 
 Failed syncs/tests/builds preserve the previously published Release. A publication failure may leave a draft for retry.
 Use GitHub Actions notification settings to receive failure notifications; no personal access token is required.
 
+## Release Notes
+
+Each publication reads the upstream Release for the exact built version (`v<upstream version>`),
+never the upstream latest Release. If its body is missing, empty, or unavailable, the publisher reads
+the matching `CHANGELOG.md` section from the pinned upstream commit included in the build.
+If neither source has that version's notes, publication stops instead of showing unrelated changes.
+
+The upstream text is attributed and placed inside a personal-build wrapper explaining the no-ads changes,
+fork update channel, and ad-hoc signing limitations. This exact combined body is used both for the GitHub
+Release description and `latest.json.body`. Installer URLs, version, source commit, size and SHA256
+continue to come from this fork's verified build, not from the upstream Release assets.
+This copies notes at publication time; it does not continuously rewrite older Releases when upstream edits them.
+
 ## Build and Download
 
 1. Open the fork's Actions tab and enable workflows if GitHub prompts you.
