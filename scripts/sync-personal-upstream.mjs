@@ -12,6 +12,11 @@ const protectedPaths = [
   "scripts/personal-release.mjs",
   "scripts/tests/personal-automation.test.mjs",
   "apps/codex-plus-manager/src/personal-no-ads.test.ts",
+  "crates/codex-plus-core/src/update.rs",
+  "crates/codex-plus-core/src/update/",
+  "crates/codex-plus-core/src/version.rs",
+  "crates/codex-plus-core/tests/all/updater.rs",
+  "crates/codex-plus-core/examples/personal-update-check.rs",
 ];
 
 export function mergeUpstream(root, upstreamRef) {

@@ -31,7 +31,7 @@ before the candidate is pushed to `personal-macos`. There is no force push and p
 A concurrent branch update also stops publication so a stale build cannot overwrite newer work.
 
 Successful builds receive a unique `v<version>-noads.<run number>` tag and GitHub Release.
-The DMG and `SHA256SUMS.txt` are uploaded to a draft first; the Release becomes public only after both uploads are verified.
+The DMG, `SHA256SUMS.txt`, and `latest.json` are uploaded to a draft first; the Release becomes public only after all uploads are verified.
 Failed syncs/tests/builds preserve the previously published Release. A publication failure may leave a draft for retry.
 Use GitHub Actions notification settings to receive failure notifications; no personal access token is required.
 
@@ -53,6 +53,17 @@ Back up the existing Codex++ application and configuration before replacing it.
 macOS may require approval under Privacy & Security for this unnotarized build.
 Do not disable Gatekeeper globally. Screen recording/accessibility permissions may need to be granted again.
 
-Use builds from this fork for updates. Installing an upstream release restores upstream behavior, including advertisements.
-The application update source has not been changed; do not use its upstream installer to update this personal build.
+Builds starting with noads.5 embed the full personal build version and use only
+`https://github.com/zideliu/CodexPlusPlus/releases/latest/download/latest.json` for in-app updates.
+Same-upstream builds compare the numeric `noads` suffix (10 is newer than 9); identical builds are not offered again.
+The updater rejects non-personal versions and installer URLs outside the matching Release in this fork.
+Downloads and cached installers are verified against the SHA256 from `latest.json`.
+macOS still validates the application identity, signature and exact planned build before replacement.
+
+**One-time migration:** old installed builds through noads.4 still use the original update source.
+Install the new fork DMG manually once; do not use an old build's in-app update to switch channels.
+Moving from an upstream Developer ID signature to an ad-hoc signature may require manual installation
+and renewed system permissions. No signature or Gatekeeper checks are disabled by this change.
+
+Use builds from this fork for updates. Manually installing an upstream release still restores upstream behavior, including advertisements.
 If an automatic sync stops on conflicts, resolve them manually while retaining the no-ads tests, then run the workflow again.

@@ -1358,6 +1358,7 @@ type UpdateResult = CommandResult<{
   releaseSummary?: string;
   assetName?: string | null;
   assetUrl?: string | null;
+  sha256?: string | null;
   updateAvailable?: boolean;
   /** 安装包已经在后台下好（「有可用更新时自动下载」），点「安装」直接安装。 */
   downloaded?: boolean;
@@ -3476,6 +3477,7 @@ export function App() {
           body: selected.releaseSummary ?? "",
           asset_name: selected.assetName,
           asset_url: selected.assetUrl,
+          sha256: selected.sha256,
         }
       : null;
 
@@ -11109,6 +11111,9 @@ function AboutScreen({
               );
             })()}
             {/* 改的是设置草稿，由同页 GlobalSettingsScreen 的自动保存落盘（#1272）。 */}
+            <CxRow title={t("更新源")} detail="github.com/zideliu/CodexPlusPlus" onClick={() => openUrl("https://github.com/zideliu/CodexPlusPlus/releases")}>
+              <ExternalLink aria-hidden="true" className="cx-set-chevron" />
+            </CxRow>
             <CxRow
               detail={t("打开时及运行期间每隔几小时检查一次")}
               title={t("启动时自动检查更新")}

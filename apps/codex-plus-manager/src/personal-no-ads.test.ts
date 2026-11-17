@@ -51,3 +51,15 @@ test("manager and backend keep the personal no-ads boundary after upstream merge
   assert.match(entry, /Ok\(json!\(\{ "version": 1, "ads": \[\] \}\)\)/);
   assert.doesNotMatch(entry, /\.await|fetch_ad_list_from_urls|reqwest|client/);
 });
+
+test("in-app updates stay on the personal channel and carry the checksum to installation", () => {
+  const manager = readFileSync(new URL("./App.tsx", import.meta.url), "utf8");
+  const commands = readFileSync(new URL("../src-tauri/src/commands.rs", import.meta.url), "utf8");
+  const updater = readFileSync(new URL("../../../crates/codex-plus-core/src/update.rs", import.meta.url), "utf8");
+  const version = readFileSync(new URL("../../../crates/codex-plus-core/src/version.rs", import.meta.url), "utf8");
+  assert.match(updater, /https:\/\/github.com\/zideliu\/CodexPlusPlus\/releases\/latest\/download\/latest.json/);
+  assert.doesNotMatch(updater, /BigPizzaV3/);
+  assert.match(manager, /sha256: selected.sha256/);
+  assert.match(commands, /"sha256": update.sha256/);
+  assert.match(version, /option_env!\("CODEX_PLUS_BUILD_VERSION"\)/);
+});

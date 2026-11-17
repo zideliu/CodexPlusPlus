@@ -23,6 +23,26 @@ export function verifyAssets(directory, filename) {
   return [path.join(directory, filename), path.join(directory, "SHA256SUMS.txt")];
 }
 
+export function latestManifest(version, runNumber, sha, directory, body = "") {
+  const { buildVersion, tag, filename } = releaseIdentity(version, runNumber, sha);
+  verifyAssets(directory, filename);
+  const data = readFileSync(path.join(directory, filename));
+  const repo = "zideliu/CodexPlusPlus";
+  return {
+    version: buildVersion,
+    tag_name: tag,
+    url: `https://github.com/${repo}/releases/tag/${tag}`,
+    body,
+    source_commit: sha,
+    assets: [{
+      name: filename,
+      url: `https://github.com/${repo}/releases/download/${tag}/${filename}`,
+      sha256: createHash("sha256").update(data).digest("hex"),
+      size: data.length,
+    }],
+  };
+}
+
 export function publishPersonal(root, artifactDir, bundle, env = process.env) {
   const { GITHUB_REPOSITORY: repo, CANDIDATE_SHA: sha, BASE_SHA: base, UPSTREAM_SHA: upstream,
     BUILD_VERSION: version, GITHUB_RUN_NUMBER: runNumber, GITHUB_RUN_ID: runId } = env;
@@ -30,6 +50,11 @@ export function publishPersonal(root, artifactDir, bundle, env = process.env) {
   if (![base, upstream].every(s => /^[a-f0-9]{40}$/.test(s || ""))) throw new Error("Invalid source commits");
   const { tag, filename } = releaseIdentity(version, runNumber, sha);
   const assets = verifyAssets(artifactDir, filename);
+  const metadata = path.join(env.RUNNER_TEMP || root, "latest.json");
+  const manifest = latestManifest(version, runNumber, sha, artifactDir,
+    `Codex++ ${version}-noads.${runNumber}: personal no-ads macOS build. Updates remain on zideliu/CodexPlusPlus. Ad-hoc signed, not Apple-notarized.`);
+  writeFileSync(metadata, `${JSON.stringify(manifest, null, 2)}\n`);
+  assets.push(metadata);
   const run = (cmd, args) => execFileSync(cmd, args, { cwd: root, env, encoding: "utf8" }).trim();
   const git = (...args) => run("git", args);
   const gh = (...args) => run("gh", args);
@@ -59,6 +84,8 @@ export function publishPersonal(root, artifactDir, bundle, env = process.env) {
     `- Build: https://github.com/${repo}/actions/runs/${runId}\n` +
     `- Includes removal of sponsor UI and advertisement network requests.\n` +
     `- Universal DMG: Apple Silicon and Intel; ad-hoc signed, not Apple-notarized.\n\n` +
+    `- In-app updates use this fork's latest.json and compare numeric noads build numbers.\n` +
+    `- Existing builds through noads.4 still use the original update source: install this DMG manually once to switch channels.\n\n` +
     `Download the DMG and SHA256SUMS.txt to the same directory, then run \`shasum -a 256 -c SHA256SUMS.txt\`.\n\n` +
     `macOS may require approval in Privacy & Security. Do not disable Gatekeeper globally.\n`);
   if (!existing) gh("release", "create", tag, "--repo", repo, "--verify-tag", "--target", sha,

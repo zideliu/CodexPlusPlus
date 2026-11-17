@@ -158,7 +158,7 @@ fn prepare_bundles(ops: &impl BundleOps, plan: &UpdatePlan, mounted: &Path) -> a
     for (index, spec) in BUNDLES.iter().copied().enumerate() {
         let source = mounted.join(spec.name);
         let info = validate_bundle(ops, &source, spec)?;
-        if super::parse_version_tag(&info.version)? != super::parse_version_tag(&plan.version)?
+        if !super::compare_versions(&info.version, &plan.version)?.is_eq()
             || !super::is_newer_version(&info.version, &plan.old_bundles[index].version)?
         {
             bail!("安装包版本不符合更新计划：{}", source.display());
@@ -1754,6 +1754,21 @@ mod tests {
                 "resource-1.0.0"
             );
         }
+    }
+
+    #[test]
+    fn personal_build_upgrade_requires_exact_plan_build() {
+        let (_temp, mut plan, payload) = fixture(false);
+        plan.old_bundles[0].version = "2.7.1-noads.9".into();
+        plan.version = "2.7.1-noads.10".into();
+        bundle(&payload, BUNDLES[0], "2.7.1-noads.11");
+        assert!(prepare_bundles(&FixtureOps::default(), &plan, &payload).is_err());
+        // prepare_bundles creates staging before checking, so use a fresh fixture.
+        let (_temp2, mut plan2, payload2) = fixture(false);
+        plan2.old_bundles[0].version = "2.7.1-noads.9".into();
+        plan2.version = "2.7.1-noads.10".into();
+        bundle(&payload2, BUNDLES[0], "2.7.1-noads.10");
+        prepare_bundles(&FixtureOps::default(), &plan2, &payload2).unwrap();
     }
 
     #[test]

@@ -72,6 +72,19 @@ jobs:
         working-directory: apps/codex-plus-manager
         run: npm ci
 
+      - name: Embed personal runtime version
+        if: steps.sync.outputs.should_build == 'true'
+        env:
+          UPSTREAM_VERSION: ${{ steps.sync.outputs.version }}
+          CANDIDATE_SHA: ${{ steps.sync.outputs.sha }}
+        run: |
+          node --input-type=module -e '
+            import { appendFileSync } from "node:fs";
+            import { releaseIdentity } from "./scripts/personal-release.mjs";
+            const { buildVersion } = releaseIdentity(process.env.UPSTREAM_VERSION, process.env.GITHUB_RUN_NUMBER, process.env.CANDIDATE_SHA);
+            appendFileSync(process.env.GITHUB_ENV, `CODEX_PLUS_BUILD_VERSION=${buildVersion}\n`);
+          '
+
       - name: Check generated renderer
         if: steps.sync.outputs.should_build == 'true'
         run: node scripts/assemble-renderer-inject.mjs --check
@@ -96,12 +109,16 @@ jobs:
         run: |
           cargo test --locked -p codex-plus-core --test all ads::
           cargo test --locked -p codex-plus-core --test all injection_script_does_not_fetch_remote_ads
+          cargo test --locked -p codex-plus-core --test all updater::
+          cargo test --locked -p codex-plus-core --lib version::tests::
+          cargo test --locked -p codex-plus-core --lib update::tests::
+          cargo test --locked -p codex-plus-core --lib personal_build
 
       - name: Build ad-hoc signed universal DMG
         if: steps.sync.outputs.should_build == 'true'
         run: |
-          VERSION="$(node -p 'JSON.parse(require("fs").readFileSync("apps/codex-plus-manager/package.json", "utf8")).version')"
-          bash scripts/installer/macos/build-universal.sh "${VERSION}-noads.${GITHUB_RUN_NUMBER}"
+          bash scripts/installer/macos/build-universal.sh "$CODEX_PLUS_BUILD_VERSION"
+          cargo build --locked --release --target aarch64-apple-darwin -p codex-plus-core --example personal-update-check
 
       - name: Verify app signatures and architecture
         if: steps.sync.outputs.should_build == 'true'
@@ -109,12 +126,15 @@ jobs:
           set -euo pipefail
           for APP in "dist/macos/stage/Codex++.app" "dist/macos/stage/Codex++ 管理工具.app"; do
             plutil -lint "$APP/Contents/Info.plist"
+            test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")" = "$CODEX_PLUS_BUILD_VERSION"
             codesign --verify --deep --strict "$APP"
             EXECUTABLE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Contents/Info.plist")
             ARCHS="$(lipo -archs "$APP/Contents/MacOS/$EXECUTABLE")"
             [[ " $ARCHS " == *" x86_64 "* ]]
             [[ " $ARCHS " == *" arm64 "* ]]
           done
+          # Verify the compiled runtime version separately from bundle metadata.
+          target/aarch64-apple-darwin/release/examples/personal-update-check --version
           cd dist/macos
           shasum -a 256 ./*.dmg > SHA256SUMS.txt
 
@@ -128,6 +148,15 @@ jobs:
             dist/macos/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 30
+
+      - name: Upload read-only update checker
+        if: steps.sync.outputs.should_build == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: personal-update-check-${{ github.run_number }}
+          path: target/aarch64-apple-darwin/release/examples/personal-update-check
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Bundle exact tested source
         if: steps.sync.outputs.should_build == 'true'

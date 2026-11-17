@@ -4,13 +4,14 @@ use std::time::{Duration, Instant};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 #[cfg(any(target_os = "macos", test))]
 pub mod macos;
 
-pub const DEFAULT_REPOSITORY: &str = "BigPizzaV3/CodexPlusPlus";
+pub const DEFAULT_REPOSITORY: &str = "zideliu/CodexPlusPlus";
 pub const DEFAULT_LATEST_JSON_URL: &str =
-    "https://github.com/BigPizzaV3/CodexPlusPlus/releases/latest/download/latest.json";
+    "https://github.com/zideliu/CodexPlusPlus/releases/latest/download/latest.json";
 const UPDATE_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const UPDATE_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(600);
 
@@ -27,6 +28,8 @@ pub struct Release {
     pub body: String,
     pub asset_name: Option<String>,
     pub asset_url: Option<String>,
+    #[serde(default)]
+    pub sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -37,6 +40,7 @@ pub struct UpdateCheck {
     pub asset_name: Option<String>,
     pub asset_url: Option<String>,
     pub update_available: bool,
+    pub sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -85,13 +89,54 @@ pub fn parse_version_tag(value: &str) -> anyhow::Result<Vec<u64>> {
         .collect()
 }
 
-pub fn is_newer_version(candidate: &str, current: &str) -> anyhow::Result<bool> {
+pub fn personal_build_number(version: &str) -> anyhow::Result<Option<u64>> {
+    let normalized = version.trim().trim_start_matches(['v', 'V']);
+    let Some((base, build)) = normalized.split_once("-noads.") else {
+        anyhow::ensure!(!normalized.contains("-noads"), "Invalid personal build: {version}");
+        return Ok(None);
+    };
+    let segments: Vec<_> = base.split('.').collect();
+    anyhow::ensure!(segments.len() == 3 && segments.iter().all(|s| !s.is_empty() && s.bytes().all(|c| c.is_ascii_digit())), "Invalid personal version: {version}");
+    anyhow::ensure!(!build.is_empty() && build.bytes().all(|c| c.is_ascii_digit()), "Invalid personal build: {version}");
+    let number = build.parse::<u64>()?;
+    anyhow::ensure!(number > 0, "Invalid personal build: {version}");
+    Ok(Some(number))
+}
+
+pub fn compare_versions(candidate: &str, current: &str) -> anyhow::Result<std::cmp::Ordering> {
+    let left_build = personal_build_number(candidate)?.unwrap_or(0);
+    let right_build = personal_build_number(current)?.unwrap_or(0);
     let mut left = parse_version_tag(candidate)?;
     let mut right = parse_version_tag(current)?;
     let len = left.len().max(right.len());
     left.resize(len, 0);
     right.resize(len, 0);
-    Ok(left > right)
+    Ok(left.cmp(&right).then_with(|| left_build.cmp(&right_build)))
+}
+
+pub fn is_newer_version(candidate: &str, current: &str) -> anyhow::Result<bool> {
+    Ok(compare_versions(candidate, current)?.is_gt())
+}
+
+/// 检查、下载和安装共用同一个更新源边界，拒绝官方包及旧缓存中的跨仓库地址。
+pub fn validate_personal_release(release: &Release) -> anyhow::Result<()> {
+    anyhow::ensure!(personal_build_number(&release.version)?.is_some(), "更新必须是 noads 自用构建");
+    let version = release.version.trim().trim_start_matches(['v', 'V']);
+    let tag = format!("v{version}");
+    let name = format!("CodexPlusPlus-{version}-macos-universal.dmg");
+    let expected_url = format!("https://github.com/{DEFAULT_REPOSITORY}/releases/download/{tag}/{name}");
+    anyhow::ensure!(release.asset_name.as_deref() == Some(name.as_str()) && release.asset_url.as_deref() == Some(expected_url.as_str()), "仅允许从个人 fork 下载对应的 noads 安装包");
+    anyhow::ensure!(release.url.is_empty() || release.url == format!("https://github.com/{DEFAULT_REPOSITORY}/releases/tag/{tag}"), "Release 地址不属于个人 fork");
+    anyhow::ensure!(release.sha256.as_ref().is_some_and(|hash| hash.len() == 64 && hash.bytes().all(|c| c.is_ascii_hexdigit())), "更新缺少有效 SHA256 校验值");
+    Ok(())
+}
+
+fn verify_asset_digest(release: &Release, bytes: &[u8]) -> anyhow::Result<()> {
+    if let Some(expected) = &release.sha256 {
+        let actual = format!("{:x}", Sha256::digest(bytes));
+        anyhow::ensure!(actual.eq_ignore_ascii_case(expected), "安装包 SHA256 校验失败");
+    }
+    Ok(())
 }
 
 pub fn release_from_github_payload(payload: &Value) -> anyhow::Result<Release> {
@@ -125,6 +170,7 @@ pub fn release_from_github_payload(payload: &Value) -> anyhow::Result<Release> {
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string(),
+        sha256: None,
         asset_name: selected.as_ref().map(|asset| asset.name.clone()),
         asset_url: selected.map(|asset| asset.browser_download_url),
     })
@@ -153,8 +199,14 @@ pub fn release_from_latest_json_payload(payload: &Value) -> anyhow::Result<Relea
         })
         .collect::<Vec<_>>();
     let selected = select_update_asset(&assets);
+    let sha256 = selected.as_ref().and_then(|selected| {
+        payload.get("assets")?.as_array()?.iter()
+            .find(|asset| asset.get("name").and_then(Value::as_str) == Some(selected.name.as_str()))?
+            .get("sha256")?.as_str().map(str::to_string)
+    });
     Ok(Release {
         version,
+        sha256,
         url: payload
             .get("url")
             .or_else(|| payload.get("html_url"))
@@ -203,7 +255,9 @@ pub async fn fetch_latest_release(latest_json_url: &str) -> anyhow::Result<Relea
         .error_for_status()?
         .json::<Value>()
         .await?;
-    release_from_latest_json_payload(&payload)
+    let release = release_from_latest_json_payload(&payload)?;
+    validate_personal_release(&release)?;
+    Ok(release)
 }
 
 pub async fn check_for_update(current_version: &str) -> anyhow::Result<UpdateCheck> {
@@ -216,6 +270,7 @@ pub async fn check_for_update(current_version: &str) -> anyhow::Result<UpdateChe
         asset_name: release.asset_name,
         asset_url: release.asset_url,
         update_available,
+        sha256: release.sha256,
     })
 }
 
@@ -234,6 +289,7 @@ pub async fn perform_update_with_progress<F>(
 where
     F: FnMut(UpdateProgress) + Send,
 {
+    validate_personal_release(release)?;
     // 后台已经下好（「有可用更新时自动下载」）就直接用，不再下载一遍。
     let (installer_path, downloaded_bytes, total_bytes) = match downloaded_installer(release, download_dir) {
         Some((path, bytes)) => (path, bytes, Some(bytes)),
@@ -297,6 +353,7 @@ pub async fn download_update_with_progress<F>(
 where
     F: FnMut(UpdateProgress) + Send,
 {
+    validate_personal_release(release)?;
     if let Some((path, _)) = downloaded_installer(release, download_dir) {
         return Ok(path);
     }
@@ -318,6 +375,9 @@ pub fn downloaded_installer(release: &Release, download_dir: &Path) -> Option<(P
     let path = download_dir.join(safe_asset_name(name).ok()?);
     let expected: u64 = std::fs::read_to_string(completion_marker(&path)).ok()?.trim().parse().ok()?;
     let actual = std::fs::metadata(&path).ok()?.len();
+    if release.sha256.is_some() {
+        verify_asset_digest(release, &std::fs::read(&path).ok()?).ok()?;
+    }
     (expected > 0 && expected == actual).then_some((path, actual))
 }
 
@@ -488,6 +548,7 @@ pub fn download_asset_to(
     bytes: &[u8],
     download_dir: &Path,
 ) -> anyhow::Result<PathBuf> {
+    verify_asset_digest(release, bytes)?;
     let name = release
         .asset_name
         .as_ref()
@@ -543,7 +604,7 @@ fn prune_old_installers(download_dir: &Path, current: &Path) {
 /// 安装包及其完成标记，比当前新的（后台已下好、还没装）保留。文件名里认不出版本号的不动。
 /// 安装器可能还在收尾、文件被占用时删不掉，留到下次启动再删。返回删掉的安装包。
 pub fn prune_installed_installers(download_dir: &Path, current_version: &str) -> Vec<PathBuf> {
-    let Ok(current) = parse_version_tag(current_version) else {
+    let Ok(_) = compare_versions(current_version, current_version) else {
         return Vec::new();
     };
     let Ok(entries) = std::fs::read_dir(download_dir) else {
@@ -554,18 +615,14 @@ pub fn prune_installed_installers(download_dir: &Path, current_version: &str) ->
         if !is_installer_asset_path(&path) {
             continue;
         }
-        let Some(mut version) = path
+        let Some(version) = path
             .file_name()
             .and_then(|name| name.to_str())
             .and_then(installer_file_version)
         else {
             continue;
         };
-        let mut current = current.clone();
-        let len = version.len().max(current.len());
-        version.resize(len, 0);
-        current.resize(len, 0);
-        if version > current {
+        if !is_newer_version(&version, current_version).is_ok_and(|newer| !newer) {
             continue;
         }
         if std::fs::remove_file(&path).is_ok() {
@@ -577,7 +634,15 @@ pub fn prune_installed_installers(download_dir: &Path, current_version: &str) ->
 }
 
 /// 从 `CodexPlusPlus-2.6.7-windows-x64-setup.exe` 这类文件名里取第一个 `数字.数字.数字` 版本号。
-fn installer_file_version(name: &str) -> Option<Vec<u64>> {
+fn installer_file_version(name: &str) -> Option<String> {
+    if let Some(rest) = name.strip_prefix("CodexPlusPlus-") {
+        if let Some((version, _)) = rest.split_once("-macos-") {
+            if version.contains("-noads") {
+                personal_build_number(version).ok()??;
+                return Some(version.to_string());
+            }
+        }
+    }
     name.split(['-', '_', ' '])
         .map(|part| part.trim_start_matches(['v', 'V']))
         .find(|part| {
@@ -587,12 +652,7 @@ fn installer_file_version(name: &str) -> Option<Vec<u64>> {
                     .iter()
                     .all(|segment| !segment.is_empty() && segment.bytes().all(|byte| byte.is_ascii_digit()))
         })
-        .and_then(|part| {
-            part.split('.')
-                .take(3)
-                .map(|segment| segment.parse::<u64>().ok())
-                .collect()
-        })
+        .map(|part| part.split('.').take(3).collect::<Vec<_>>().join("."))
 }
 
 fn is_installer_asset_path(path: &Path) -> bool {
@@ -824,6 +884,7 @@ mod tests {
         });
 
         let release = Release {
+            sha256: None,
             version: "v9.9.9".to_string(),
             url: String::new(),
             body: String::new(),

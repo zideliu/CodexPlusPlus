@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { mergeUpstream } from "../sync-personal-upstream.mjs";
-import { releaseIdentity, verifyAssets } from "../personal-release.mjs";
+import { releaseIdentity, verifyAssets, latestManifest } from "../personal-release.mjs";
 
 function fixture() {
   const root = mkdtempSync(path.join(os.tmpdir(), "personal-sync-"));
@@ -123,8 +123,22 @@ test("publication requires exactly the DMG and its valid checksum", () => {
   writeFileSync(path.join(root, filename), content);
   writeFileSync(path.join(root, "SHA256SUMS.txt"), `${hash}  ./${filename}\n`);
   assert.equal(verifyAssets(root, filename).length, 2);
+  const manifest = latestManifest("2.7.1", "4", "a".repeat(40), root, "test notes");
+  assert.equal(manifest.version, "2.7.1-noads.4");
+  assert.equal(manifest.assets[0].sha256, hash);
+  assert.equal(manifest.assets[0].size, content.length);
+  assert.equal(manifest.assets[0].url, `https://github.com/zideliu/CodexPlusPlus/releases/download/v2.7.1-noads.4/${filename}`);
+  assert.equal(manifest.url, "https://github.com/zideliu/CodexPlusPlus/releases/tag/v2.7.1-noads.4");
+  assert.equal(manifest.body, "test notes");
+  assert.equal(manifest.source_commit, "a".repeat(40));
   writeFileSync(path.join(root, filename), "corrupt");
   assert.throws(() => verifyAssets(root, filename), /checksum/);
   writeFileSync(path.join(root, "unexpected.txt"), "extra");
   assert.throws(() => verifyAssets(root, filename), /Unexpected/);
+});
+
+test("upstream updater changes require manual review before publication", () => {
+  const f = fixture();
+  f.upstream({ "crates/codex-plus-core/src/update.rs": "new updater code\n" });
+  assert.throws(() => mergeUpstream(f.root, "upstream"), /manual review/);
 });

@@ -8563,6 +8563,7 @@ pub async fn check_update() -> CommandResult<Value> {
                     "releaseSummary": update.release_summary,
                     "assetName": update.asset_name,
                     "assetUrl": update.asset_url,
+                    "sha256": update.sha256,
                     "updateAvailable": update.update_available,
                     // 安装包是否已经在后台下好：界面据此显示「安装」而不是「下载并安装」。
                     "downloaded": update.update_available && update_already_downloaded(&update),
@@ -8596,6 +8597,7 @@ fn update_already_downloaded(update: &codex_plus_core::update::UpdateCheck) -> b
         body: String::new(),
         asset_name: update.asset_name.clone(),
         asset_url: update.asset_url.clone(),
+        sha256: update.sha256.clone(),
     };
     codex_plus_core::update::downloaded_installer(&release, &update_download_dir()).is_some()
 }
