@@ -2,24 +2,36 @@ name: Build macOS (no ads)
 
 on:
   workflow_dispatch:
+  schedule:
+    # UTC 02:17 = Asia/Shanghai 10:17. GitHub schedules can be delayed.
+    - cron: "17 2 * * *"
 
 permissions:
   contents: read
 
 concurrency:
-  group: macos-personal-${{ github.ref }}
+  group: macos-personal-release
   cancel-in-progress: false
 
 jobs:
   macos:
+    if: github.repository == 'zideliu/CodexPlusPlus' && github.ref == 'refs/heads/personal-macos'
     name: macOS universal DMG
     runs-on: macos-15
     timeout-minutes: 120
     env:
       MACOSX_DEPLOYMENT_TARGET: "12.0"
+    outputs:
+      should_build: ${{ steps.sync.outputs.should_build }}
+      sha: ${{ steps.sync.outputs.sha }}
+      base: ${{ steps.sync.outputs.base }}
+      upstream: ${{ steps.sync.outputs.upstream }}
+      version: ${{ steps.sync.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: personal-macos
+          fetch-depth: 0
           persist-credentials: false
 
       - uses: actions/setup-node@v4
@@ -28,45 +40,71 @@ jobs:
           cache: npm
           cache-dependency-path: apps/codex-plus-manager/package-lock.json
 
+      - name: Test personal automation safeguards
+        run: node --test scripts/tests/personal-automation.test.mjs
+
+      - name: Merge upstream candidate without pushing
+        id: sync
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            node scripts/sync-personal-upstream.mjs --force-build
+          else
+            node scripts/sync-personal-upstream.mjs
+          fi
+
       - uses: dtolnay/rust-toolchain@stable
+        if: steps.sync.outputs.should_build == 'true'
         with:
           targets: x86_64-apple-darwin,aarch64-apple-darwin
 
       - uses: Swatinem/rust-cache@v2
+        if: steps.sync.outputs.should_build == 'true'
         with:
           shared-key: macos-personal
           cache-on-failure: true
 
       - name: Install frontend dependencies
+        if: steps.sync.outputs.should_build == 'true'
         working-directory: apps/codex-plus-manager
         run: npm ci
 
       - name: Check generated renderer
+        if: steps.sync.outputs.should_build == 'true'
         run: node scripts/assemble-renderer-inject.mjs --check
 
       - name: Check frontend types
+        if: steps.sync.outputs.should_build == 'true'
         working-directory: apps/codex-plus-manager
         run: npm run check
 
       - name: Frontend regression tests
+        if: steps.sync.outputs.should_build == 'true'
         working-directory: apps/codex-plus-manager
         run: npm test
 
       - name: Build frontend
+        if: steps.sync.outputs.should_build == 'true'
         working-directory: apps/codex-plus-manager
         run: npm run vite:build
 
       - name: Rust ad regression tests
+        if: steps.sync.outputs.should_build == 'true'
         run: |
           cargo test --locked -p codex-plus-core --test all ads::
           cargo test --locked -p codex-plus-core --test all injection_script_does_not_fetch_remote_ads
 
       - name: Build ad-hoc signed universal DMG
+        if: steps.sync.outputs.should_build == 'true'
         run: |
           VERSION="$(node -p 'JSON.parse(require("fs").readFileSync("apps/codex-plus-manager/package.json", "utf8")).version')"
           bash scripts/installer/macos/build-universal.sh "${VERSION}-noads.${GITHUB_RUN_NUMBER}"
 
       - name: Verify app signatures and architecture
+        if: steps.sync.outputs.should_build == 'true'
         run: |
           set -euo pipefail
           for APP in "dist/macos/stage/Codex++.app" "dist/macos/stage/Codex++ 管理工具.app"; do
@@ -81,6 +119,7 @@ jobs:
           shasum -a 256 ./*.dmg > SHA256SUMS.txt
 
       - name: Upload installable DMG
+        if: steps.sync.outputs.should_build == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: codex-plus-plus-macos-noads-${{ github.run_number }}
@@ -90,9 +129,64 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      - name: Bundle exact tested source
+        if: steps.sync.outputs.should_build == 'true'
+        env:
+          BASE_SHA: ${{ steps.sync.outputs.base }}
+          CANDIDATE_SHA: ${{ steps.sync.outputs.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          git diff --exit-code
+          git diff --cached --exit-code
+          git bundle create "$RUNNER_TEMP/candidate.bundle" HEAD "^${BASE_SHA}^"
+
+      - name: Upload candidate commit for publication
+        if: steps.sync.outputs.should_build == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: personal-source-${{ github.run_number }}
+          path: ${{ runner.temp }}/candidate.bundle
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Build summary
+        if: steps.sync.outputs.should_build == 'true'
         run: |
           printf '%s\n' '## macOS no-ads build' \
             'Download the DMG from the Artifacts section of this run.' \
             'Supports Apple Silicon and Intel. Ad-hoc signed; not Apple-notarized.' \
             'No Apple signing secrets or API provider credentials are used.' >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    name: Publish tested macOS Release
+    needs: macos
+    if: needs.macos.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      # Run the publisher from the workflow commit, not from freshly fetched upstream code.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/download-artifact@v4
+        with:
+          name: codex-plus-plus-macos-noads-${{ github.run_number }}
+          path: ${{ runner.temp }}/release-assets
+      - uses: actions/download-artifact@v4
+        with:
+          name: personal-source-${{ github.run_number }}
+          path: ${{ runner.temp }}/source
+      - name: Push tested merge and publish Release with checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ needs.macos.outputs.sha }}
+          BASE_SHA: ${{ needs.macos.outputs.base }}
+          UPSTREAM_SHA: ${{ needs.macos.outputs.upstream }}
+          BUILD_VERSION: ${{ needs.macos.outputs.version }}
+        run: node scripts/personal-release.mjs "$RUNNER_TEMP/release-assets" "$RUNNER_TEMP/source/candidate.bundle"

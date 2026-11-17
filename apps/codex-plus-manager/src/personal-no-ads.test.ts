@@ -35,3 +35,19 @@ test("advertising navigation and UI are not rendered", () => {
   vm.runInContext(declaration("codexPlusModalTab"), context);
   assert.equal(vm.runInContext('codexPlusModalTab("sponsor")', context), "home");
 });
+
+test("manager and backend keep the personal no-ads boundary after upstream merges", () => {
+  const manager = readFileSync(new URL("./App.tsx", import.meta.url), "utf8");
+  const source = ts.createSourceFile("App.tsx", manager, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const home = source.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === "HomeScreen");
+  assert.ok(home, "HomeScreen must remain inspectable");
+  assert.doesNotMatch(home.getText(source), /home-hero|home-sponsor|featuredAds|刷新推荐/);
+  assert.doesNotMatch(manager, /call<AdsResult>\("load_ads"\)|cx-float-hint-main/);
+  const catalog = readFileSync(new URL("./GatewayProviders.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(catalog, /key: "sponsor"/);
+  const backend = readFileSync(new URL("../../../crates/codex-plus-core/src/ads.rs", import.meta.url), "utf8");
+  const entry = backend.match(/pub async fn fetch_ad_list\(\)[\s\S]*?\n\}/)?.[0];
+  assert.ok(entry, "Backend advertisement entry must remain inspectable");
+  assert.match(entry, /Ok\(json!\(\{ "version": 1, "ads": \[\] \}\)\)/);
+  assert.doesNotMatch(entry, /\.await|fetch_ad_list_from_urls|reqwest|client/);
+});
