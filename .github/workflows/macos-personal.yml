@@ -35,6 +35,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: macos-personal
+          cache-on-failure: true
 
       - name: Install frontend dependencies
         working-directory: apps/codex-plus-manager
@@ -72,7 +73,9 @@ jobs:
             plutil -lint "$APP/Contents/Info.plist"
             codesign --verify --deep --strict "$APP"
             EXECUTABLE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Contents/Info.plist")
-            lipo -verify_arch x86_64 arm64 "$APP/Contents/MacOS/$EXECUTABLE"
+            ARCHS="$(lipo -archs "$APP/Contents/MacOS/$EXECUTABLE")"
+            [[ " $ARCHS " == *" x86_64 "* ]]
+            [[ " $ARCHS " == *" arm64 "* ]]
           done
           cd dist/macos
           shasum -a 256 ./*.dmg > SHA256SUMS.txt
