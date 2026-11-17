@@ -22,7 +22,7 @@ async function fixture(t) {
   return { root, target, cache, temporary, run: () => prepareSherpaCache(target, temporary) };
 }
 
-for (const platform of ["win-x64-static-MT-Release", "linux-x64-static"]) {
+for (const platform of ["win-x64-static-MT-Release", "linux-x64-static", "osx-x64-static", "osx-arm64-static"]) {
   for (const missing of [null, "sherpa-onnx-c-api", "onnxruntime"]) {
     test(`${platform}: ${missing ? `quarantines missing ${missing}` : "keeps a complete package"}`, async t => {
       const f = await fixture(t);
@@ -123,4 +123,20 @@ test("both CI jobs repair caches and invalidate build scripts before Rust tests"
     assert.match(step, /cargo clean --package sherpa-onnx-sys/);
     assert.doesNotMatch(step, /\n        if:/, "cache recovery also runs when only build-script outputs were restored");
   }
+});
+
+test("personal macOS builds repair native libraries before tests and the update checker", () => {
+  const workflow = fs.readFileSync(path.join(__dirname, "../../.github/workflows/macos-personal.yml"), "utf8");
+  const cache = workflow.indexOf("- uses: Swatinem/rust-cache@v2");
+  const repair = workflow.indexOf("- name: Repair sherpa native library cache");
+  const tests = workflow.indexOf("- name: Rust ad regression tests");
+  assert.ok(cache >= 0 && repair > cache && tests > repair);
+  const step = workflow.slice(repair).split(/\n      - name:/)[0];
+  assert.match(step, /node scripts\/prepare-sherpa-cache\.mjs/);
+  for (const target of ["x86_64-apple-darwin", "aarch64-apple-darwin"]) {
+    assert.ok(step.includes(`cargo clean --package sherpa-onnx-sys --target ${target}`));
+  }
+  const checker = workflow.split("- name: Build read-only update checker")[1].split(/\n      - name:/)[0];
+  assert.ok(checker.indexOf("node scripts/prepare-sherpa-cache.mjs") < checker.indexOf("cargo build"));
+  assert.ok(checker.indexOf("cargo clean --package sherpa-onnx-sys") < checker.indexOf("cargo build"));
 });

@@ -67,6 +67,16 @@ jobs:
           shared-key: macos-personal
           cache-on-failure: true
 
+      - name: Repair sherpa native library cache
+        if: steps.sync.outputs.should_build == 'true'
+        run: |
+          node --test scripts/tests/prepare-sherpa-cache.test.cjs
+          node scripts/prepare-sherpa-cache.mjs
+          # Cached Rust build scripts can still point at pruned native archives.
+          cargo clean --package sherpa-onnx-sys
+          cargo clean --package sherpa-onnx-sys --target x86_64-apple-darwin
+          cargo clean --package sherpa-onnx-sys --target aarch64-apple-darwin
+
       - name: Install frontend dependencies
         if: steps.sync.outputs.should_build == 'true'
         working-directory: apps/codex-plus-manager
@@ -118,6 +128,12 @@ jobs:
         if: steps.sync.outputs.should_build == 'true'
         run: |
           bash scripts/installer/macos/build-universal.sh "$CODEX_PLUS_BUILD_VERSION"
+
+      - name: Build read-only update checker
+        if: steps.sync.outputs.should_build == 'true'
+        run: |
+          node scripts/prepare-sherpa-cache.mjs
+          cargo clean --package sherpa-onnx-sys --target aarch64-apple-darwin
           cargo build --locked --release --target aarch64-apple-darwin -p codex-plus-core --example personal-update-check
 
       - name: Verify app signatures and architecture
