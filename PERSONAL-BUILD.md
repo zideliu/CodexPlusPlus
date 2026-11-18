@@ -4,8 +4,8 @@ Modified on 2026-11-15 for a personal, ad-free Codex++ build.
 This is an unofficial derivative of BigPizzaV3/CodexPlusPlus, not an OpenAI product.
 The original AGPL-3.0-only license and third-party notices remain in effect.
 
-The default `personal-macos` branch includes upstream 2.7.1 (`7abbcf2`), merged on
-2026-11-17 while preserving the personal changes. The `main` branch retains
+The default `personal-macos` branch includes upstream 2.7.2 and post-release changes (`4221403c`), merged on
+2026-11-18 while preserving the personal changes. The `main` branch retains
 upstream history independently.
 
 ## Changes
