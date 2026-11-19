@@ -4397,6 +4397,41 @@ fn chat_completion_response_maps_custom_and_namespace_calls_with_request_context
     assert_eq!(converted["output"][1]["type"], "function_call");
     assert_eq!(converted["output"][1]["name"], "open_file");
     assert_eq!(converted["output"][1]["namespace"], "mcp__vscode_mcp__");
+    assert_eq!(converted["output"][1]["encrypted_function_args"], json!([]));
+    assert_eq!(converted["output"][1]["arguments"], r#"{"path":"src/main.rs"}"#);
+    assert!(converted["output"][0].get("encrypted_function_args").is_none());
+}
+
+#[test]
+fn chat_sse_marks_plaintext_namespace_arguments_on_all_item_events() {
+    let args = r#"{"task_name":"sample","message":"Read the test"}"#;
+    let chunk = json!({"id":"chatcmpl_sample","model":"sample","choices":[{
+        "delta":{"tool_calls":[{"index":0,"id":"call_sample","type":"function",
+            "function":{"name":"collaboration__spawn_agent","arguments":args}}]},
+        "finish_reason":"tool_calls"
+    }]});
+    let request = json!({"tools":[{"type":"namespace","name":"collaboration","tools":[
+        {"type":"function","name":"spawn_agent","parameters":{"type":"object"}}
+    ]}]});
+    let sse = chat_sse_to_responses_sse_with_request(
+        &format!("data: {chunk}\n\ndata: [DONE]\n\n"),
+        &request,
+    );
+    let events: Vec<Value> = sse.lines()
+        .filter_map(|line| serde_json::from_str(line.strip_prefix("data: ")?).ok())
+        .collect();
+    for (kind, path, arguments) in [
+        ("response.output_item.added", "/item", ""),
+        ("response.output_item.done", "/item", args),
+        ("response.completed", "/response/output/0", args),
+    ] {
+        let event = events.iter().find(|event| event["type"] == kind).unwrap();
+        let item = event.pointer(path).unwrap();
+        assert_eq!(item["namespace"], "collaboration");
+        assert_eq!(item["name"], "spawn_agent");
+        assert_eq!(item["encrypted_function_args"], json!([]));
+        assert_eq!(item["arguments"], arguments);
+    }
 }
 
 #[test]

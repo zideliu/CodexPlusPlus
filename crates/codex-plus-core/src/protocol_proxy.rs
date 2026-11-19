@@ -6577,6 +6577,7 @@ async fn upstream_request_parts(
             );
         }
         dedupe_responses_tool_search_outputs(&mut body);
+        mark_plaintext_failed_spawn_history(&mut body);
         normalize_responses_item_ids(&mut body);
     }
 
@@ -8307,6 +8308,47 @@ fn normalize_responses_item_ids(body: &mut Value) {
         }
         Value::Object(_) => normalize_responses_item_id(input),
         _ => {}
+    }
+}
+
+const SPAWN_ARGUMENTS_EOF: &str =
+    "failed to parse function arguments: EOF while parsing a value at line 1 column 0";
+
+/// 旧桥接的空 spawn_agent 参数已在本地解析失败。回放时显式标记明文，
+/// 避免原生上游按工具声明再次尝试解密。调用与执行失败的记录均保留。
+fn mark_plaintext_failed_spawn_history(body: &mut Value) {
+    let Some(items) = body.get_mut("input").and_then(Value::as_array_mut) else {
+        return;
+    };
+    let mut history = items.iter_mut().peekable();
+    while let Some(call) = history.next() {
+        let Some(result) = history.peek() else { break };
+        if call.get("type").and_then(Value::as_str) != Some("function_call")
+            || call.get("namespace").and_then(Value::as_str) != Some("collaboration")
+            || call.get("name").and_then(Value::as_str) != Some("spawn_agent")
+            || call.get("arguments").and_then(Value::as_str) != Some("")
+            || result.get("type").and_then(Value::as_str) != Some("function_call_output")
+            || result.get("output").and_then(Value::as_str) != Some(SPAWN_ARGUMENTS_EOF)
+        {
+            continue;
+        }
+        let id = call.get("call_id").and_then(Value::as_str);
+        if id.is_none_or(str::is_empty) || result.get("call_id").and_then(Value::as_str) != id {
+            continue;
+        }
+        // 显式加密字段或其他未知扩展可能描述原始参数，只处理已知桥接形态。
+        let known_call = call.as_object().is_some_and(|object| {
+            object.keys().all(|key| matches!(
+                key.as_str(), "type" | "id" | "status" | "name" | "namespace"
+                | "arguments" | "call_id" | "internal_chat_message_metadata_passthrough"
+            ))
+        });
+        let known_metadata = call.get("internal_chat_message_metadata_passthrough").is_none_or(|meta| {
+            meta.as_object().is_some_and(|fields| fields.keys().all(|key| key == "turn_id"))
+        });
+        if known_call && known_metadata {
+            call["encrypted_function_args"] = json!([]);
+        }
     }
 }
 
@@ -10688,6 +10730,8 @@ fn tool_call_added_item(
     });
     if !namespace.is_empty() {
         item["item"]["namespace"] = json!(namespace);
+        // Chat 的工具参数是明文；和 Responses 适配器一样显式标出加密字段列表。
+        item["item"]["encrypted_function_args"] = json!([]);
     }
     item
 }
@@ -10833,6 +10877,7 @@ fn response_tool_call_item(
     });
     if !namespace.is_empty() {
         item["namespace"] = json!(namespace);
+        item["encrypted_function_args"] = json!([]);
     }
     item
 }
@@ -14464,6 +14509,50 @@ data: {"type":"response.output_item.done","item":{"type":"function_call","name":
 #[cfg(test)]
 mod parallel_tool_call_pairing_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn native_replay_marks_only_confirmed_plaintext_failed_spawn_history() {
+        let relay = crate::settings::RelayProfile {
+            protocol: RelayProtocol::Responses,
+            base_url: "https://relay.example.test/v1".into(),
+            ..Default::default()
+        };
+        let message = json!({"type":"message","role":"user","content":"Continue"});
+        let call = json!({"type":"function_call","id":"fc_a","call_id":"c","name":"spawn_agent",
+            "namespace":"collaboration","status":"completed","arguments":"",
+            "internal_chat_message_metadata_passthrough":{"turn_id":"t"}});
+        let output = json!({"type":"function_call_output","id":"fco_a","call_id":"c","output":SPAWN_ARGUMENTS_EOF});
+        let body = json!({"model":"sample","input":[call, output, message]});
+        let (_, shaped, _, _) = upstream_request_parts(
+            &relay, body.clone(), "/v1/responses", None, false, None, ProxySessionHeaders::default(),
+        ).await.unwrap();
+        let mut expected = body.clone();
+        expected["input"][0]["encrypted_function_args"] = json!([]);
+        assert_eq!(shaped["input"], expected["input"]);
+        mark_plaintext_failed_spawn_history(&mut expected);
+        assert_eq!(shaped["input"], expected["input"]);
+
+        for (index, key, value) in [
+            (0, "namespace", json!("other")),
+            (0, "arguments", json!(r#"{"message":"task"}"#)),
+            (0, "encrypted_function_args", json!(["message"])),
+            (0, "encrypted_content", json!("opaque")),
+            (0, "internal_chat_message_metadata_passthrough", json!({"opaque":"metadata"})),
+            (1, "call_id", json!("another-call")),
+            (1, "output", json!("Actual output")),
+            (1, "output", json!([{"type":"input_text","text":SPAWN_ARGUMENTS_EOF}])),
+        ] {
+            let mut other = body.clone();
+            other["input"][index][key] = value;
+            let expected = other.clone();
+            mark_plaintext_failed_spawn_history(&mut other);
+            assert_eq!(other, expected, "{key}");
+        }
+        let mut lone = json!({"input":[call]});
+        let expected = lone.clone();
+        mark_plaintext_failed_spawn_history(&mut lone);
+        assert_eq!(lone, expected);
+    }
 
     /// #2185：同一轮并行两个带图片的 view_image 与一个 exec 之后，出站请求里每个
     /// 工具输出都必须仍能找到对应调用；exec 适配器只改写 exec 那一对。
