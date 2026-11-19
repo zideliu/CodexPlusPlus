@@ -1,0 +1,20 @@
+name: Restore personal merge candidate
+description: Check out the exact Git bundle prepared for this run
+inputs:
+  sha:
+    description: Candidate commit from the sync job
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/download-artifact@v4
+      with:
+        name: personal-source-${{ github.run_number }}
+        path: ${{ runner.temp }}/source
+    - shell: bash
+      env:
+        CANDIDATE_SHA: ${{ inputs.sha }}
+      run: |
+        git fetch "$RUNNER_TEMP/source/candidate.bundle" HEAD
+        test "$(git rev-parse FETCH_HEAD)" = "$CANDIDATE_SHA"
+        git checkout --detach "$CANDIDATE_SHA"

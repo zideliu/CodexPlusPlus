@@ -4,9 +4,8 @@ Modified on 2026-11-15 for a personal, ad-free Codex++ build.
 This is an unofficial derivative of BigPizzaV3/CodexPlusPlus, not an OpenAI product.
 The original AGPL-3.0-only license and third-party notices remain in effect.
 
-The default `personal-macos` branch includes upstream 2.7.2 and post-release changes (`4221403c`), merged on
-2026-11-18 while preserving the personal changes. The `main` branch retains
-upstream history independently.
+The default `personal-macos` branch tracks upstream `main` and carries the personal changes.
+Each Release links to the exact upstream commit included in the build.
 
 ## Changes
 
@@ -52,11 +51,11 @@ This copies notes at publication time; it does not continuously rewrite older Re
 
 1. Open the fork's Actions tab and enable workflows if GitHub prompts you.
 2. Select **Build macOS (no ads)**, then **Run workflow** on `personal-macos`.
-3. Manual runs also check/merge upstream and always build, even without new commits.
+3. The default run checks for new upstream commits. To publish a fork-only change or intentionally rebuild the same source, select **Build and publish even if upstream is already merged**.
 4. After success, download the DMG and `SHA256SUMS.txt` from the repository's Releases page.
    The run's Artifacts section also retains a ZIP for 30 days; Release assets do not have that expiry.
 
-The workflow builds on `macos-15`, supports Apple Silicon and Intel, and uses ad-hoc signing.
+The frontend builds once. Two `macos-15` runners compile the Apple Silicon and Intel release binaries in parallel, each with its own dependency cache. The Apple Silicon build also produces the update checker in the same Cargo invocation. Rust regression tests run alongside both builds. The packaging job combines the two binaries with `lipo` and verifies the ad-hoc signatures and architectures before publication.
 It does not require Apple developer certificates, notarization credentials, or provider API keys.
 Do not upload application settings, tokens, or local account data to this repository.
 
@@ -79,4 +78,4 @@ Moving from an upstream Developer ID signature to an ad-hoc signature may requir
 and renewed system permissions. No signature or Gatekeeper checks are disabled by this change.
 
 Use builds from this fork for updates. Manually installing an upstream release still restores upstream behavior, including advertisements.
-If an automatic sync stops on conflicts, resolve them manually while retaining the no-ads tests, then run the workflow again.
+If you merge a conflict resolution directly into `personal-macos`, use the manual rebuild option to publish that commit.

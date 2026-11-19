@@ -57,13 +57,20 @@ test("source conflicts fail without moving personal branch", () => {
   assert.equal(f.git("rev-parse", "HEAD"), before);
 });
 
-test("upstream cannot silently change automation", () => {
-  const f = fixture();
-  f.upstream({ ".github/workflows/build.yml": "changed permissions\n" });
-  const before = f.git("rev-parse", "HEAD");
-  assert.throws(() => mergeUpstream(f.root, "upstream"), /manual review/);
-  assert.equal(f.git("rev-parse", "HEAD"), before);
-});
+for (const file of [
+  ".github/workflows/build.yml",
+  ".github/actions/personal-candidate/action.yml",
+  "scripts/installer/macos/build-personal-target.sh",
+  "scripts/tests/personal-macos-target.test.mjs",
+]) {
+  test(`upstream changes to ${file} require review`, () => {
+    const f = fixture();
+    f.upstream({ [file]: "changed automation\n" });
+    const before = f.git("rev-parse", "HEAD");
+    assert.throws(() => mergeUpstream(f.root, "upstream"), /manual review/);
+    assert.equal(f.git("rev-parse", "HEAD"), before);
+  });
+}
 
 test("dirty checkout cannot be merged", () => {
   const f = fixture();
@@ -105,6 +112,30 @@ test("candidate bundle transfers the exact tested commit, including a no-change 
     execFileSync("git", ["fetch", bundle, "HEAD"], { cwd: publisher, stdio: "pipe" });
     assert.equal(execFileSync("git", ["rev-parse", "FETCH_HEAD"], { cwd: publisher, encoding: "utf8" }).trim(), result.sha);
   }
+});
+
+test("the universal macOS release reuses one frontend build and waits for both architectures and regressions", () => {
+  const workflow = readFileSync(new URL("../../.github/workflows/macos-personal.yml", import.meta.url), "utf8");
+  function job(name) {
+    const body = workflow.split(`\n  ${name}:\n`)[1]?.split(/\n  [\w-]+:/)[0];
+    assert.ok(body, `missing job: ${name}`);
+    return body;
+  }
+  assert.match(job("prepare"), /npm run vite:build/);
+  assert.equal(workflow.match(/npm run vite:build/g)?.length, 1);
+  const native = job("native");
+  assert.match(native, /matrix:/);
+  assert.match(native, /x86_64-apple-darwin/);
+  assert.match(native, /aarch64-apple-darwin/);
+  assert.match(job("package"), /UNIVERSAL_SKIP_BUILD[=:]\s*["']?1/);
+
+  function dependencies(name) {
+    const needs = job(name).match(/^    needs:([^\n]*(?:\n      - [\w-]+)*)/m);
+    assert.ok(needs, `missing dependencies for ${name}`);
+    return needs[1].match(/\b[a-z][\w-]*/g) || [];
+  }
+  assert.ok(dependencies("package").includes("native"));
+  for (const gate of ["regression", "package"]) assert.ok(dependencies("publish").includes(gate), `publish must wait for ${gate}`);
 });
 
 test("release identity uses validated version/run/commit, not branch names", () => {

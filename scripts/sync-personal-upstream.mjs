@@ -8,6 +8,9 @@ const renderer = "assets/inject/renderer-inject.js";
 const manifest = "assets/inject/renderer-inject/manifest.json";
 const protectedPaths = [
   ".github/workflows/",
+  ".github/actions/personal-candidate/",
+  "scripts/installer/macos/build-personal-target.sh",
+  "scripts/tests/personal-macos-target.test.mjs",
   "scripts/sync-personal-upstream.mjs",
   "scripts/personal-release.mjs",
   "scripts/tests/personal-automation.test.mjs",

@@ -125,18 +125,17 @@ test("both CI jobs repair caches and invalidate build scripts before Rust tests"
   }
 });
 
-test("personal macOS builds repair native libraries before tests and the update checker", () => {
+test("each personal macOS Rust job repairs its restored native cache before compiling", () => {
   const workflow = fs.readFileSync(path.join(__dirname, "../../.github/workflows/macos-personal.yml"), "utf8");
-  const cache = workflow.indexOf("- uses: Swatinem/rust-cache@v2");
-  const repair = workflow.indexOf("- name: Repair sherpa native library cache");
-  const tests = workflow.indexOf("- name: Rust ad regression tests");
-  assert.ok(cache >= 0 && repair > cache && tests > repair);
-  const step = workflow.slice(repair).split(/\n      - name:/)[0];
-  assert.match(step, /node scripts\/prepare-sherpa-cache\.mjs/);
-  for (const target of ["x86_64-apple-darwin", "aarch64-apple-darwin"]) {
-    assert.ok(step.includes(`cargo clean --package sherpa-onnx-sys --target ${target}`));
+  for (const [job, compile] of [["native", "build-personal-target.sh"], ["regression", "cargo test"]]) {
+    const body = workflow.split(`\n  ${job}:\n`)[1]?.split(/\n  [a-z][\w-]*:/)[0];
+    assert.ok(body, `missing job: ${job}`);
+    const cache = body.indexOf("Swatinem/rust-cache@");
+    const repair = body.indexOf("node scripts/prepare-sherpa-cache.mjs");
+    const clean = body.indexOf("cargo clean --package sherpa-onnx-sys");
+    const build = body.indexOf(compile);
+    assert.ok(cache >= 0 && cache < repair && repair < clean && clean < build, `${job} must repair its own cache before building`);
+    if (job === "native") assert.match(body.slice(clean, build), /--target/);
+    assert.doesNotMatch(body.slice(build), /cargo clean/, `${job} must keep repaired outputs during compilation`);
   }
-  const checker = workflow.split("- name: Build read-only update checker")[1].split(/\n      - name:/)[0];
-  assert.ok(checker.indexOf("node scripts/prepare-sherpa-cache.mjs") < checker.indexOf("cargo build"));
-  assert.ok(checker.indexOf("cargo clean --package sherpa-onnx-sys") < checker.indexOf("cargo build"));
 });

@@ -2,6 +2,11 @@ name: Build macOS (no ads)
 
 on:
   workflow_dispatch:
+    inputs:
+      force_build:
+        description: Build and publish even if upstream is already merged
+        type: boolean
+        default: false
   schedule:
     # UTC 02:17 = Asia/Shanghai 10:17. GitHub schedules can be delayed.
     - cron: "17 2 * * *"
@@ -13,168 +18,92 @@ concurrency:
   group: macos-personal-release
   cancel-in-progress: false
 
+env:
+  MACOSX_DEPLOYMENT_TARGET: "12.0"
+
 jobs:
-  macos:
+  prepare:
     if: github.repository == 'zideliu/CodexPlusPlus' && github.ref == 'refs/heads/personal-macos'
-    name: macOS universal DMG
-    runs-on: macos-15
-    timeout-minutes: 120
-    env:
-      MACOSX_DEPLOYMENT_TARGET: "12.0"
+    name: Sync upstream and prepare frontend
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     outputs:
       should_build: ${{ steps.sync.outputs.should_build }}
       sha: ${{ steps.sync.outputs.sha }}
       base: ${{ steps.sync.outputs.base }}
       upstream: ${{ steps.sync.outputs.upstream }}
       version: ${{ steps.sync.outputs.version }}
+      build_version: ${{ steps.identity.outputs.build_version }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: personal-macos
           fetch-depth: 0
           persist-credentials: false
-
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: apps/codex-plus-manager/package-lock.json
 
       - name: Test personal automation safeguards
-        run: node --test scripts/tests/personal-automation.test.mjs
+        run: node --test scripts/tests/personal-automation.test.mjs scripts/tests/personal-macos-target.test.mjs scripts/tests/prepare-sherpa-cache.test.cjs
 
       - name: Merge upstream candidate without pushing
         id: sync
         env:
-          EVENT_NAME: ${{ github.event_name }}
+          FORCE_BUILD: ${{ inputs.force_build }}
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+          if [ "$FORCE_BUILD" = "true" ]; then
             node scripts/sync-personal-upstream.mjs --force-build
           else
             node scripts/sync-personal-upstream.mjs
           fi
 
-      - uses: dtolnay/rust-toolchain@stable
-        if: steps.sync.outputs.should_build == 'true'
-        with:
-          targets: x86_64-apple-darwin,aarch64-apple-darwin
-
-      - uses: Swatinem/rust-cache@v2
-        if: steps.sync.outputs.should_build == 'true'
-        with:
-          shared-key: macos-personal
-          cache-on-failure: true
-
-      - name: Repair sherpa native library cache
-        if: steps.sync.outputs.should_build == 'true'
-        run: |
-          node --test scripts/tests/prepare-sherpa-cache.test.cjs
-          node scripts/prepare-sherpa-cache.mjs
-          # Cached Rust build scripts can still point at pruned native archives.
-          cargo clean --package sherpa-onnx-sys
-          cargo clean --package sherpa-onnx-sys --target x86_64-apple-darwin
-          cargo clean --package sherpa-onnx-sys --target aarch64-apple-darwin
-
-      - name: Install frontend dependencies
-        if: steps.sync.outputs.should_build == 'true'
-        working-directory: apps/codex-plus-manager
-        run: npm ci
-
-      - name: Embed personal runtime version
+      - name: Derive personal runtime version
+        id: identity
         if: steps.sync.outputs.should_build == 'true'
         env:
           UPSTREAM_VERSION: ${{ steps.sync.outputs.version }}
           CANDIDATE_SHA: ${{ steps.sync.outputs.sha }}
         run: |
-          node --input-type=module -e '
-            import { appendFileSync } from "node:fs";
-            import { releaseIdentity } from "./scripts/personal-release.mjs";
-            const { buildVersion } = releaseIdentity(process.env.UPSTREAM_VERSION, process.env.GITHUB_RUN_NUMBER, process.env.CANDIDATE_SHA);
-            appendFileSync(process.env.GITHUB_ENV, `CODEX_PLUS_BUILD_VERSION=${buildVersion}\n`);
-          '
+          node --input-type=module <<'NODE'
+          import { appendFileSync } from "node:fs";
+          import { releaseIdentity } from "./scripts/personal-release.mjs";
+          const { UPSTREAM_VERSION, GITHUB_RUN_NUMBER, CANDIDATE_SHA, GITHUB_OUTPUT } = process.env;
+          const { buildVersion } = releaseIdentity(UPSTREAM_VERSION, GITHUB_RUN_NUMBER, CANDIDATE_SHA);
+          appendFileSync(GITHUB_OUTPUT, `build_version=${buildVersion}\n`);
+          NODE
 
+      - name: Cache npm downloads for the candidate lockfile
+        if: steps.sync.outputs.should_build == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/codex-plus-manager/package-lock.json') }}
       - name: Check generated renderer
         if: steps.sync.outputs.should_build == 'true'
         run: node scripts/assemble-renderer-inject.mjs --check
-
-      - name: Check frontend types
+      - name: Test and build shared frontend
         if: steps.sync.outputs.should_build == 'true'
         working-directory: apps/codex-plus-manager
-        run: npm run check
-
-      - name: Frontend regression tests
-        if: steps.sync.outputs.should_build == 'true'
-        working-directory: apps/codex-plus-manager
-        run: npm test
-
-      - name: Build frontend
-        if: steps.sync.outputs.should_build == 'true'
-        working-directory: apps/codex-plus-manager
-        run: npm run vite:build
-
-      - name: Rust ad regression tests
-        if: steps.sync.outputs.should_build == 'true'
         run: |
-          cargo test --locked -p codex-plus-core --test all ads::
-          cargo test --locked -p codex-plus-core --test all injection_script_does_not_fetch_remote_ads
-          cargo test --locked -p codex-plus-core --test all updater::
-          cargo test --locked -p codex-plus-core --lib version::tests::
-          cargo test --locked -p codex-plus-core --lib update::tests::
-          cargo test --locked -p codex-plus-core --lib personal_build
-
-      - name: Build ad-hoc signed universal DMG
+          npm ci
+          npm run check
+          npm test
+          npm run vite:build
+          test -s dist/index.html
+      - uses: actions/upload-artifact@v4
         if: steps.sync.outputs.should_build == 'true'
-        run: |
-          bash scripts/installer/macos/build-universal.sh "$CODEX_PLUS_BUILD_VERSION"
-
-      - name: Build read-only update checker
-        if: steps.sync.outputs.should_build == 'true'
-        run: |
-          node scripts/prepare-sherpa-cache.mjs
-          cargo clean --package sherpa-onnx-sys --target aarch64-apple-darwin
-          cargo build --locked --release --target aarch64-apple-darwin -p codex-plus-core --example personal-update-check
-
-      - name: Verify app signatures and architecture
-        if: steps.sync.outputs.should_build == 'true'
-        run: |
-          set -euo pipefail
-          for APP in "dist/macos/stage/Codex++.app" "dist/macos/stage/Codex++ 管理工具.app"; do
-            plutil -lint "$APP/Contents/Info.plist"
-            test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")" = "$CODEX_PLUS_BUILD_VERSION"
-            codesign --verify --deep --strict "$APP"
-            EXECUTABLE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Contents/Info.plist")
-            ARCHS="$(lipo -archs "$APP/Contents/MacOS/$EXECUTABLE")"
-            [[ " $ARCHS " == *" x86_64 "* ]]
-            [[ " $ARCHS " == *" arm64 "* ]]
-          done
-          # Verify the compiled runtime version separately from bundle metadata.
-          target/aarch64-apple-darwin/release/examples/personal-update-check --version
-          cd dist/macos
-          shasum -a 256 ./*.dmg > SHA256SUMS.txt
-
-      - name: Upload installable DMG
-        if: steps.sync.outputs.should_build == 'true'
-        uses: actions/upload-artifact@v4
         with:
-          name: codex-plus-plus-macos-noads-${{ github.run_number }}
-          path: |
-            dist/macos/*.dmg
-            dist/macos/SHA256SUMS.txt
+          name: personal-frontend-${{ github.run_number }}
+          path: apps/codex-plus-manager/dist/
+          include-hidden-files: true
           if-no-files-found: error
-          retention-days: 30
-
-      - name: Upload read-only update checker
-        if: steps.sync.outputs.should_build == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: personal-update-check-${{ github.run_number }}
-          path: target/aarch64-apple-darwin/release/examples/personal-update-check
-          if-no-files-found: error
+          overwrite: true
           retention-days: 7
 
-      - name: Bundle exact tested source
+      - name: Bundle exact candidate source
         if: steps.sync.outputs.should_build == 'true'
         env:
           BASE_SHA: ${{ steps.sync.outputs.base }}
@@ -184,28 +113,172 @@ jobs:
           git diff --exit-code
           git diff --cached --exit-code
           git bundle create "$RUNNER_TEMP/candidate.bundle" HEAD "^${BASE_SHA}^"
-
-      - name: Upload candidate commit for publication
+      - uses: actions/upload-artifact@v4
         if: steps.sync.outputs.should_build == 'true'
-        uses: actions/upload-artifact@v4
         with:
           name: personal-source-${{ github.run_number }}
           path: ${{ runner.temp }}/candidate.bundle
           if-no-files-found: error
+          overwrite: true
           retention-days: 7
 
-      - name: Build summary
-        if: steps.sync.outputs.should_build == 'true'
+  native:
+    name: Build ${{ matrix.target }}
+    needs: prepare
+    if: needs.prepare.outputs.should_build == 'true'
+    runs-on: macos-15
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64-apple-darwin, aarch64-apple-darwin]
+    env:
+      TARGET: ${{ matrix.target }}
+      CODEX_PLUS_BUILD_VERSION: ${{ needs.prepare.outputs.build_version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.base }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/personal-candidate
+        with:
+          sha: ${{ needs.prepare.outputs.sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: personal-frontend-${{ github.run_number }}
+          path: apps/codex-plus-manager/dist
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: macos-personal-release-${{ matrix.target }}
+          cache-on-failure: true
+      - name: Repair sherpa native library cache
         run: |
-          printf '%s\n' '## macOS no-ads build' \
-            'Download the DMG from the Artifacts section of this run.' \
-            'Supports Apple Silicon and Intel. Ad-hoc signed; not Apple-notarized.' \
-            'No Apple signing secrets or API provider credentials are used.' >> "$GITHUB_STEP_SUMMARY"
+          node scripts/prepare-sherpa-cache.mjs
+          cargo clean --package sherpa-onnx-sys --target "$TARGET"
+      - name: Build release binaries
+        run: |
+          test -s apps/codex-plus-manager/dist/index.html
+          bash scripts/installer/macos/build-personal-target.sh "$TARGET"
+          git diff --exit-code HEAD
+      - name: Verify embedded runtime version
+        if: matrix.target == 'aarch64-apple-darwin'
+        run: '"target/$TARGET/release/examples/personal-update-check" --version'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: personal-binaries-${{ matrix.target }}-${{ github.run_number }}
+          path: |
+            target/${{ matrix.target }}/release/codex-plus-plus
+            target/${{ matrix.target }}/release/codex-plus-legacy-shim
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
+      - name: Upload read-only update checker
+        if: matrix.target == 'aarch64-apple-darwin'
+        uses: actions/upload-artifact@v4
+        with:
+          name: personal-update-check-${{ github.run_number }}
+          path: target/aarch64-apple-darwin/release/examples/personal-update-check
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
+
+  regression:
+    name: Rust no-ads and updater tests
+    needs: prepare
+    if: needs.prepare.outputs.should_build == 'true'
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      CODEX_PLUS_BUILD_VERSION: ${{ needs.prepare.outputs.build_version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.base }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/personal-candidate
+        with:
+          sha: ${{ needs.prepare.outputs.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: macos-personal-regression
+          cache-on-failure: true
+      - name: Repair sherpa native library cache
+        run: |
+          node scripts/prepare-sherpa-cache.mjs
+          cargo clean --package sherpa-onnx-sys
+      - name: Rust ad regression tests
+        run: |
+          cargo test --locked -p codex-plus-core --test all ads::
+          cargo test --locked -p codex-plus-core --test all injection_script_does_not_fetch_remote_ads
+          cargo test --locked -p codex-plus-core --test all updater::
+          cargo test --locked -p codex-plus-core --lib version::tests::
+          cargo test --locked -p codex-plus-core --lib update::tests::
+          cargo test --locked -p codex-plus-core --lib personal_build
+          git diff --exit-code HEAD
+
+  package:
+    name: Package and verify universal DMG
+    needs: [prepare, native]
+    if: needs.prepare.outputs.should_build == 'true'
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      CODEX_PLUS_BUILD_VERSION: ${{ needs.prepare.outputs.build_version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.base }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/personal-candidate
+        with:
+          sha: ${{ needs.prepare.outputs.sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: personal-binaries-x86_64-apple-darwin-${{ github.run_number }}
+          path: target/x86_64-apple-darwin/release
+      - uses: actions/download-artifact@v4
+        with:
+          name: personal-binaries-aarch64-apple-darwin-${{ github.run_number }}
+          path: target/aarch64-apple-darwin/release
+      - name: Combine release binaries and package DMG
+        env:
+          UNIVERSAL_SKIP_BUILD: "1"
+        run: |
+          chmod +x target/*-apple-darwin/release/{codex-plus-plus,codex-plus-legacy-shim}
+          bash scripts/installer/macos/build-universal.sh "$CODEX_PLUS_BUILD_VERSION"
+      - name: Verify app signatures and architecture
+        run: |
+          for APP in "dist/macos/stage/Codex++.app" "dist/macos/stage/Codex++ 管理工具.app"; do
+            plutil -lint "$APP/Contents/Info.plist"
+            test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")" = "$CODEX_PLUS_BUILD_VERSION"
+            codesign --verify --deep --strict "$APP"
+            EXECUTABLE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Contents/Info.plist")
+            lipo "$APP/Contents/MacOS/$EXECUTABLE" -verify_arch arm64 x86_64
+          done
+          cd dist/macos
+          shasum -a 256 ./*.dmg > SHA256SUMS.txt
+      - name: Upload installable DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-plus-plus-macos-noads-${{ github.run_number }}
+          path: |
+            dist/macos/*.dmg
+            dist/macos/SHA256SUMS.txt
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 30
 
   publish:
     name: Publish tested macOS Release
-    needs: macos
-    if: needs.macos.outputs.should_build == 'true'
+    needs: [prepare, package, regression]
+    if: needs.prepare.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -230,8 +303,8 @@ jobs:
       - name: Push tested merge and publish Release with checksums
         env:
           GH_TOKEN: ${{ github.token }}
-          CANDIDATE_SHA: ${{ needs.macos.outputs.sha }}
-          BASE_SHA: ${{ needs.macos.outputs.base }}
-          UPSTREAM_SHA: ${{ needs.macos.outputs.upstream }}
-          BUILD_VERSION: ${{ needs.macos.outputs.version }}
+          CANDIDATE_SHA: ${{ needs.prepare.outputs.sha }}
+          BASE_SHA: ${{ needs.prepare.outputs.base }}
+          UPSTREAM_SHA: ${{ needs.prepare.outputs.upstream }}
+          BUILD_VERSION: ${{ needs.prepare.outputs.version }}
         run: node scripts/personal-release.mjs "$RUNNER_TEMP/release-assets" "$RUNNER_TEMP/source/candidate.bundle"
